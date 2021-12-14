@@ -200,7 +200,8 @@ def add_entry(bib_dict, add_arg):
     if not new_bib_dict["id"] in bib_dict.keys():
         notify(new_bib_dict["title"])
         notify('added: ' + new_bib_dict["id"])
-        new_bib_dict = add_local_file(new_bib_dict)
+        if config["main"]["localpdf"] == "True":
+            new_bib_dict = add_local_file(new_bib_dict)
         bib_dict[new_bib_dict["id"]] = new_bib_dict
     else:
         if not new_bib_dict["doi"] == bib_dict[new_bib_dict["id"]]["doi"]:
@@ -323,8 +324,10 @@ def add_tags(bib_dict, id, tags):
 def add_note(bib_dict, id, note):
     d = bib_dict[id]
     if not "notes" in d.keys():
+        print("added notes list")
         d["notes"] = []
     d["notes"].append(' '.join(note))
+    print(d)
     bib_dict[id] = d
     return bib_dict
 
@@ -355,39 +358,36 @@ def main():
         config['main']['fulltext_dir'] = config['main']['dir'] + '/fulltext'
 
     parser = ArgumentParser()
-    parser.add_argument('-f','--file', default=config['main']['json_file'], type=str, help='bibtex file')
-    parser.add_argument('-w','--write', type=str, choices=['json', 'bib', 'std', 'stdout'], default="json",  help='format to write to: json')
-    parser.add_argument('-o','--output', type=str, default=config['main']['json_file'], help='output file')
+    #parser.add_argument('-f','--file', default=config['main']['json_file'], type=str, help='bibtex file')
+    #parser.add_argument('-w','--write', type=str, choices=['json', 'bib', 'std', 'stdout'], default="json",  help='format to write to: json')
+    #parser.add_argument('-o','--output', type=str, default=config['main']['json_file'], help='output file')
     parser.add_argument('-a','--add', type=str, help='source to add')
     parser.add_argument('-d','--dmenu', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='dmenu selector')
     parser.add_argument('-z','--fzf', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='fzf selector')
-    parser.add_argument('-i','--id', type=str, help='id of paper to edit')
-    parser.add_argument('-t','--tags', nargs='+', type=str, help='dmenu selector')
-    parser.add_argument('-n','--note', nargs='+', type=str, help='dmenu selector')
-    parser.add_argument('--notify', action='store_true', help='get notification on status')
-    parser.add_argument('--get-by-doi', type=str, help='get dict of entry by doi')
-    parser.add_argument('--get-by-id', type=str, help='get dict of by id')
-    parser.add_argument('-y', '--yes', action='store_true', help='overwrite automatically')
+    parser.add_argument('-i','--id', type=str, help='id of paper to edit in combination with tags or note options')
+    parser.add_argument('-t','--tags', nargs='+', type=str, help='add tags to paper (seperated by whitespace)')
+    parser.add_argument('-n','--note', nargs='+', type=str, help='add note to paper')
+    #parser.add_argument('--notify', action='store_true', help='get notification on status')
+    #parser.add_argument('--get-by-doi', type=str, help='get dict of entry by doi')
+    #parser.add_argument('--get-by-id', type=str, help='get dict of by id')
+    #parser.add_argument('-y', '--yes', action='store_true', help='overwrite automatically')
     parser.add_argument('-e', '--edit', action='store_true', help='open bib file in editor')
     args = parser.parse_args()
 
-    bib_dict = get_bib_dict(args.file)
+    bib_dict = get_bib_dict(config["main"]["json_file"])
 
     if args.add:
         bib_dict = add_entry(bib_dict, args.add)
 
     if args.tags:
-        if args.id:
-            bib_dict = add_tags(bib_dict,args.id, args.tags)
-        else:
+        if not args.id:
             args.id = selector(bib_dict, "id", interactive=False)
-            bib_dict = add_tags(bib_dict,args.id, args.tags)
+        bib_dict = add_tags(bib_dict,args.id, args.tags)
 
     if args.note:
         if not args.id:
             args.id = selector(bib_dict, "id", interactive=False)
-        else:
-            bib_dict = add_note(bib_dict,args.id, args.note)
+        bib_dict = add_note(bib_dict,args.id, args.note)
 
     if args.dmenu:
         selector(bib_dict, args.dmenu, prog="dmenu")
@@ -397,16 +397,16 @@ def main():
         save, bib_dict = edit(bib_dict)
         if save:
             write_db(bib_dict)
-    elif args.get_by_doi:
-        get_by_doi(bib_dict, args.get_by_doi)
-    elif args.get_by_id:
-        get_by_id(bib_dict, args.get_by_id)
-    elif args.write == 'json':
-        write_json(bib_dict, args.output)
-    elif args.write == 'bib':
-        write_bib(bib_dict, args.output)
-    else:
-        stdout_bib(bib_dict)
+    #elif args.get_by_doi:
+    #    get_by_doi(bib_dict, args.get_by_doi)
+    #elif args.get_by_id:
+    #    get_by_id(bib_dict, args.get_by_id)
+    #elif args.write == 'json':
+    #    write_json(bib_dict, args.output)
+    #elif args.write == 'bib':
+    #    write_bib(bib_dict, args.output)
+    #else:
+    #    stdout_bib(bib_dict)
 
     if args.add or args.tags or args.note:
         write_db(bib_dict)
