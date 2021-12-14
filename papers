@@ -14,9 +14,10 @@ from json         import loads, dump
 from tempfile     import mktemp
 from hashlib      import md5
 from configparser import ConfigParser
+from xdg          import BaseDirectory
 
 global config
-config_path = str(Path.home()) + '/.config/papers/papers.conf'
+config_path = BaseDirectory.xdg_config_home + '/papers/papers.conf'
 config = ConfigParser()
 config.read(config_path)
 
