@@ -51,3 +51,8 @@ Options are:
 - url
 - doi
 - id
+
+## Installation
+
+As this project is work in progress no real install method exists.
+The main file "papers" and the other two .py files need to be places in the same directory.
