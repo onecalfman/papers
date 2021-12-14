@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+
+from os           import system,path,environ,remove
+from sys          import argv, stdin
+from subprocess   import getoutput
+from argparse     import ArgumentParser
+from getdoi       import getdoi
+from doi2bib      import doi2bib
+from scidownload  import scidownload
+from pathlib      import Path
+from pyperclip    import copy
+from re           import match, compile
+from json         import loads, dump
+from tempfile     import mktemp
+from hashlib      import md5
+from configparser import ConfigParser
+
+global config
+config_path = str(Path.home()) + '/.config/papers/papers.conf'
+config = ConfigParser()
+config.read(config_path)
+
+def sanitize_bib_string(string):
+    string = string.replace('{'  , '')
+    string = string.replace('},' , '')
+    string = string.replace('}'  , '')
+    string = string.replace('\t' , '')
+    string = string.replace('\n' , '')
+    string = string.replace('Ã¼' , 'ü')
+    string = string.replace('Ã¤' , 'ä')
+    return string
+
+def convert_month(key):
+    month = ["jan","feb","mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    if type(key) == "Int":
+        return month[i+1]
+    return month.index(key[0:3])
+
+def parse_json_string(json_string):
+    vnd_dict = loads(json_string)
+    d = {}
+    for key in vnd_dict.keys():
+        if key in ["DOI", "URL"]:
+            d[key.lower()] = vnd_dict[key]
+        elif key == "created":
+            date_list = vnd_dict[key]["date-parts"][0]
+            d["year"] = date_list[0]
+            d["month"] = convert_month(date_list[1])
+            d["day"] = date_list[2]
+        else:
+            d[key] = vnd_dict[key]
+    return d
+
+def bib_to_dict(bib):
+    bib_dict = {}
+    #ll = bib.split('\n')
+    ll = bib
+    bib_dict['type'] = ll[0].split('{')[0].replace('@','')
+    bib_dict['id'] = ll[0].split('{')[1].replace(',','')
+    ll.pop(0)
+    ll.pop()
+    for line in ll:
+        try:
+            line = sanitize_bib_string(line)
+            line = line.split('=')
+            bib_dict[line[0].strip()] = line[1].strip().removesuffix(',')
+        except:
+            print('unhandled mutililine entry: ', line)
+    return bib_dict
+
+def parse_bib_file(bib_file):
+    arr = []
+    read = False
+    for line in open(bib_file).readlines():
+        if line.startswith('@'):
+            arr.append([])
+            read = True
+        if read:
+            arr[-1].append(line.replace('\n',''))
+        if line.startswith('}'):
+            read = False
+    return arr
+
+def get_bib_dict(bib_file):
+    try:
+        lines = open(bib_file).readlines()
+        json_string = ''.join(lines)
+        entry_dict = loads(json_string)
+    except:
+        entry_list = parse_bib_file(bib_file)
+        entry_dict = {}
+        for entry in entry_list:
+            entry = bib_to_dict(entry)
+            entry_dict[entry["id"]] = entry
+    return entry_dict
+
+def check_if_file_exists(output_file):
+    return False
+    global parser, args
+    if parser.get_default('file') == output_file or args.yes or args.add:
+        return False
+    if path.isfile(output_file):
+        if not input(output_file + ' exists\noverwrite? y/n ') == 'y':
+            print('exit')
+            return True
+        return False
+
+def write_json(bib_dict, output_file):
+    if check_if_file_exists(output_file):
+        return False
+    with open(output_file, 'w') as output_file:
+        dump(bib_dict, output_file)
+    return True
+
+def gen_bib_line(d, key, raw):
+    string = '  '
+    string += key
+    string += ' = {'
+    if type(d[key]) == list:
+        for elem in d[key]:
+            string += elem + ","
+        string = string[:-1]
+    else:
+        string += d[key]
+    if raw:
+        string += '},'
+    else:
+        string += '},\n'
+    return string
+
+def json_to_bib(bib_dict, raw=False):
+    lines = []
+    for id in bib_dict.keys():
+        lines.append('@' + bib_dict[id]["type"] + '{' + id.replace('\n','') + ',\n')
+        for key in bib_dict[id].keys():
+            if key == 'id' or type == 'type':
+                continue
+            lines.append(gen_bib_line(bib_dict[id], key, raw))
+        lines.append('}\n\n')
+    return lines
+
+def write_bib(bib_dict, output_file):
+    if check_if_file_exists(output_file):
+        return False
+    lines = json_to_bib(bib_dict)
+    f = open(output_file, "w")
+    f.writelines(lines)
+    f.close()
+    return True
+
+def write_db(bib_dict):
+    global config
+    write_json(bib_dict, config['main']['json_file'])
+    write_bib(bib_dict, config['main']['bib_file'])
+    return True
+
+def stdout_bib(bib_dict):
+    lines = json_to_bib(bib_dict, raw=True)
+    for line in lines:
+        print(line)
+    return True
+
+def add_local_file(new_entry):
+    global config
+    try:
+        path = config['main']['dir'] + '/'
+        name = new_entry["id"] + ".pdf"
+        new_entry["file"] = scidownload(new_entry["doi"], path=path, name=name)
+        new_entry = add_fulltext_search(new_entry)
+        notify('found pdf file')
+    except:
+        notify('no pdf file found')
+    return new_entry
+
+def gen_compatible_id(bib_dict, new_id):
+    r = compile(new_id +".*")
+    conflicting_keys = list(filter(r.match, bib_dict.keys()))
+    conflicting_keys.sort()
+    last_char = conflicting_keys[-1][-1]
+    if(match("[a-z]", last_char)):
+        if last_char == 'z':
+            raise ValueError('how?')
+        new_id += chr(ord(last_char)+1)
+    else:
+        new_id += 'a'
+    return new_id
+
+def notify(message):
+    system('notify-send "' + str(message) + '"')
+
+def add_entry(bib_dict, add_arg):
+    global args
+    if not (doi := getdoi(add_arg)):
+        notify(args.add)
+        notify('no doi found')
+        raise ValueError('empty doi value')
+    bib_string = doi2bib(doi).split('\n')
+    new_bib_dict = bib_to_dict(bib_string)
+    if not new_bib_dict["id"] in bib_dict.keys():
+        notify(new_bib_dict["title"])
+        notify('added: ' + new_bib_dict["id"])
+        new_bib_dict = add_local_file(new_bib_dict)
+        bib_dict[new_bib_dict["id"]] = new_bib_dict
+    else:
+        if not new_bib_dict["doi"] == bib_dict[new_bib_dict["id"]]["doi"]:
+            new_bib_dict["id"] = gen_compatible_id(bib_dict, new_bib_dict)
+            new_bib_dict = add_local_file(new_bib_dict)
+            bib_dict[new_bib_dict["id"]] = new_bib_dict
+            notify(new_bib_dict["title"])
+            notify('id exists: ' + new_bib_dict["id"])
+    return bib_dict
+
+
+def parse_dmenu(bib_dict, keys, fulltext=False):
+    string = ""
+    seperator = " | "
+    ids = list(bib_dict.keys())
+    ids.reverse()
+    for id in ids:
+        for key in keys:
+            try:
+                if type(bib_dict[id][key]) == str:
+                    string += seperator + bib_dict[id][key].replace('\n','')
+                elif type(bib_dict[id][key]) == list:
+                    string += seperator
+                    for elem in bib_dict[id][key]:
+                        string += str(elem).replace('\n','') + ', '
+                    string = string[:-2]
+            except:
+                string += seperator
+        if fulltext:
+            try:
+                string += open(bib_dict[id]['fulltext']).read()
+            except:
+                string += " "
+        string += seperator + '\n'
+    return string
+
+def edit(bib_dict):
+    global config
+    tmp_file = mktemp()
+    write_bib(bib_dict,tmp_file)
+    if 'vi' in config['main']['editor']:
+        config['main']['editor'] += ' -c ":set ft=bib" '
+    save = False
+    checksum = md5(open(tmp_file).read().encode('utf-8')).hexdigest()
+
+    if stdin and stdin.isatty():
+        system(config['main']['editor'] + tmp_file)
+        if checksum == md5(open(tmp_file).read().encode('utf-8')).hexdigest():
+            return False, bib_dict
+        system('diff ' + config['main']['bib_file'] + ' ' + tmp_file)
+        if input('save changes? y/n: ') == 'y':
+            save = True
+    else:
+        system(config['main']['terminal'] + ' ' + config['main']['editor'] + tmp_file)
+        if checksum == md5(open(tmp_file.read().encode('utf-8'))).hexdigest():
+            return False, bib_dict
+        if getoutput('echo -e "no\nyes" | dmenu -p "save: "') == 'yes':
+            save = True
+    bib_dict = get_bib_dict(tmp_file)
+    remove(tmp_file)
+    return save, bib_dict
+
+def add_fulltext_search(entry):
+    if not 'file' in entry or not path.isfile(entry['file']):
+        return entry
+    out_file = config['main']['fulltext_dir'] + '/' + entry['id']
+    fulltext = system('pdftotext ' + entry["file"] + ' ' + out_file)
+    line = ' '.join(open(out_file).readlines()).replace('\n','')
+    file = open(out_file, 'w')
+    file.write(line)
+    file.close()
+    entry['fulltext'] = out_file
+    return entry
+
+def selector(bib_dict, opt, prog="dmenu", interactive=True):
+    keys = ["id", "title", "author", "doi", "tags", "notes"]
+    if opt == 'fulltext':
+        string = parse_dmenu(bib_dict, keys, fulltext=True)
+        tmp_file = mktemp()
+        with open(tmp_file, 'w') as f:
+            f.write(string)
+        if prog == "dmenu":
+            id = getoutput('sed -e \'s/^L//g\' "' + tmp_file + '" | column -s\| -t | dmenu -i -l 20 | awk \'{print $1}\'')
+        elif prog == "fzf":
+            print("fzf")
+            id = system('sed -e \'s/^L//g\' "' + tmp_file + '" | column -s\| -t | fzf | awk \'{print $1}\'')
+        print(id)
+    else:
+        string = parse_dmenu(bib_dict, keys)
+        if prog == "dmenu":
+            id = getoutput('echo -e "' + string + '" | column -s\| -t | dmenu -i -l 20 | awk \'{print $1}\'')
+        elif prog == "fzf":
+            print("fzf")
+            id = system('echo -e "' + string + '" | column -s\| -t | fzf | awk \'{print $1}\'')
+
+    if opt == 'open' or opt == 'fulltext':
+        file = bib_dict[id]["file"]
+        getoutput('open ' + file + ' &')
+    elif opt == 'doi':
+        if interactive:
+            copy(bib_dict[id]['doi'])
+        else:
+            return bib_dict[id]['doi']
+    elif opt == 'id':
+        if interactive:
+            copy(id)
+        else:
+            return id
+    elif opt == 'url':
+        system(str(environ['BROWSER']) + ' ' + bib_dict[id]['url'])
+
+def add_tags(bib_dict, id, tags):
+    d = bib_dict[id]
+    if not "tags" in d.keys():
+        d["tags"] = []
+    d["tags"] = list(set([*d["tags"], *tags]))
+    bib_dict[id] = d
+    return bib_dict
+
+def add_note(bib_dict, id, note):
+    d = bib_dict[id]
+    if not "notes" in d.keys():
+        d["notes"] = []
+    d["notes"].append(' '.join(note))
+    bib_dict[id] = d
+    return bib_dict
+
+def get_by_doi(bib_dict, doi):
+    for entry in bib_dict:
+        if entry["doi"] == doi:
+            return entry
+
+def get_by_id(bib_dict, entry_id):
+    return bib_dict[entry_id]
+
+def main():
+    global parser, args, config
+
+    config['main']['dir'] = config['main']['dir'].replace('$HOME', str(Path.home()))
+    if 'json_file' in config['main']:
+        config['main']['json_file'] = config['main']['json_file'].replace('$HOME', str(Path.home()))
+    else:
+        json_file = config['main']['dir'] + '/papers.json'
+    if 'bib_file' in config['main']:
+        config['main']['bib_file'] = config['main']['bib_file'].replace('$HOME', str(Path.home()))
+    else:
+        bib_file = config['main']['dir'] + '/papers.bib'
+
+    if 'fulltext_dir' in config['main']:
+        config['main']['fulltext_dir'] = config['main']['fulltext_dir'].replace('$HOME', str(Path.home()))
+    else:
+        config['main']['fulltext_dir'] = config['main']['dir'] + '/fulltext'
+
+    parser = ArgumentParser()
+    parser.add_argument('-f','--file', default=config['main']['json_file'], type=str, help='bibtex file')
+    parser.add_argument('-w','--write', type=str, choices=['json', 'bib', 'std', 'stdout'], default="json",  help='format to write to: json')
+    parser.add_argument('-o','--output', type=str, default=config['main']['json_file'], help='output file')
+    parser.add_argument('-a','--add', type=str, help='source to add')
+    parser.add_argument('-d','--dmenu', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='dmenu selector')
+    parser.add_argument('-z','--fzf', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='fzf selector')
+    parser.add_argument('-i','--id', type=str, help='id of paper to edit')
+    parser.add_argument('-t','--tags', nargs='+', type=str, help='dmenu selector')
+    parser.add_argument('-n','--note', nargs='+', type=str, help='dmenu selector')
+    parser.add_argument('--notify', action='store_true', help='get notification on status')
+    parser.add_argument('--get-by-doi', type=str, help='get dict of entry by doi')
+    parser.add_argument('--get-by-id', type=str, help='get dict of by id')
+    parser.add_argument('-y', '--yes', action='store_true', help='overwrite automatically')
+    parser.add_argument('-e', '--edit', action='store_true', help='open bib file in editor')
+    args = parser.parse_args()
+
+    bib_dict = get_bib_dict(args.file)
+
+    if args.add:
+        bib_dict = add_entry(bib_dict, args.add)
+
+    if args.tags:
+        if args.id:
+            bib_dict = add_tags(bib_dict,args.id, args.tags)
+        else:
+            args.id = selector(bib_dict, "id", interactive=False)
+            bib_dict = add_tags(bib_dict,args.id, args.tags)
+
+    if args.note:
+        if not args.id:
+            args.id = selector(bib_dict, "id", interactive=False)
+        else:
+            bib_dict = add_note(bib_dict,args.id, args.note)
+
+    if args.dmenu:
+        selector(bib_dict, args.dmenu, prog="dmenu")
+    elif args.fzf:
+        selector(bib_dict, args.dmenu, prog="fzf")
+    elif args.edit:
+        save, bib_dict = edit(bib_dict)
+        if save:
+            write_db(bib_dict)
+    elif args.get_by_doi:
+        get_by_doi(bib_dict, args.get_by_doi)
+    elif args.get_by_id:
+        get_by_id(bib_dict, args.get_by_id)
+    elif args.write == 'json':
+        write_json(bib_dict, args.output)
+    elif args.write == 'bib':
+        write_bib(bib_dict, args.output)
+    else:
+        stdout_bib(bib_dict)
+
+    if args.add or args.tags or args.note:
+        write_db(bib_dict)
+
+if __name__ == '__main__':
+    main()
