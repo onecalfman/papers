@@ -167,10 +167,9 @@ def add_local_file(new_entry):
         path = config['main']['dir'] + '/'
         name = new_entry["id"] + ".pdf"
         new_entry["file"] = scidownload(new_entry["doi"], path=path, name=name)
-        new_entry = add_fulltext_search(new_entry)
-        notify('found pdf file')
+        notify("pdf added")
     except:
-        notify('no pdf file found')
+        notify("no pdf file found")
     return new_entry
 
 def gen_compatible_id(bib_dict, new_id):
