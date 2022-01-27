@@ -293,10 +293,15 @@ def selector(bib_dict, opt, prog="dmenu", interactive=True):
         if prog == "dmenu":
             id = getoutput('echo -e "' + string + '" | column -s\| -t | dmenu -i -l 20 | awk \'{print $1}\'')
         elif prog == "fzf":
-            print("fzf")
-            id = system('echo -e "' + string + '" | column -s\| -t | fzf | awk \'{print $1}\'')
+            id_file = mktemp()
+            system('echo -e "' + string + '" | column -s\| -t | fzf | awk \'{print $1}\' > ' + id_file)
+            id = open(id_file).read()[:-1]
+            remove(id_file)
 
+    print(opt)
     if opt == 'open' or opt == 'fulltext':
+        print(id)
+        print(bib_dict[id])
         file = bib_dict[id]["file"]
         getoutput('open ' + file + ' &')
     elif opt == 'doi':
@@ -391,7 +396,7 @@ def main():
     if args.dmenu:
         selector(bib_dict, args.dmenu, prog="dmenu")
     elif args.fzf:
-        selector(bib_dict, args.dmenu, prog="fzf")
+        selector(bib_dict, args.fzf, prog="fzf")
     elif args.edit:
         save, bib_dict = edit(bib_dict)
         if save:
