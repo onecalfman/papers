@@ -8,13 +8,14 @@ from getdoi       import getdoi
 from doi2bib      import doi2bib
 from scidownload  import scidownload
 from pathlib      import Path
-from pyperclip    import copy
+from pyperclip    import copy, paste
 from re           import match, compile
 from json         import loads, dump
 from tempfile     import mktemp
 from hashlib      import md5
 from configparser import ConfigParser
 from xdg          import BaseDirectory
+import yaml
 
 global config
 config_path = BaseDirectory.xdg_config_home + '/papers/papers.conf'
@@ -88,11 +89,14 @@ def get_bib_dict(bib_file):
         json_string = ''.join(lines)
         entry_dict = loads(json_string)
     except:
-        entry_list = parse_bib_file(bib_file)
-        entry_dict = {}
-        for entry in entry_list:
-            entry = bib_to_dict(entry)
-            entry_dict[entry["id"]] = entry
+        try:
+            entry_dict = yaml.safe_load(open(bib_file).read())
+        except:
+            entry_list = parse_bib_file(bib_file)
+            entry_dict = {}
+            for entry in entry_list:
+                entry = bib_to_dict(entry)
+                entry_dict[entry["id"]] = entry
     return entry_dict
 
 def check_if_file_exists(output_file):
@@ -149,10 +153,15 @@ def write_bib(bib_dict, output_file):
     f.close()
     return True
 
+def write_yaml(bib_dict, output_file):
+    with open(output_file, "w") as f:
+        f.write(yaml.dump(bib_dict))
+
 def write_db(bib_dict):
     global config
     write_json(bib_dict, config['main']['json_file'])
     write_bib(bib_dict, config['main']['bib_file'])
+    write_yaml(bib_dict, config['main']['bib_file'])
     return True
 
 def stdout_bib(bib_dict):
@@ -189,6 +198,7 @@ def notify(message):
     system('notify-send "' + str(message) + '"')
 
 def add_entry(bib_dict, add_arg):
+    print(add_arg)
     global args
     if not (doi := getdoi(add_arg)):
         notify(args.add)
@@ -240,9 +250,9 @@ def parse_dmenu(bib_dict, keys, fulltext=False):
 def edit(bib_dict):
     global config
     tmp_file = mktemp()
-    write_bib(bib_dict,tmp_file)
+    write_yaml(bib_dict,tmp_file)
     if 'vi' in config['main']['editor']:
-        config['main']['editor'] += ' -c ":set ft=bib" '
+        config['main']['editor'] += ' -c ":set ft=yaml" '
     save = False
     checksum = md5(open(tmp_file).read().encode('utf-8')).hexdigest()
 
@@ -250,7 +260,7 @@ def edit(bib_dict):
         system(config['main']['editor'] + tmp_file)
         if checksum == md5(open(tmp_file).read().encode('utf-8')).hexdigest():
             return False, bib_dict
-        system('diff ' + config['main']['bib_file'] + ' ' + tmp_file)
+        system('diff ' + config['main']['yaml_file'] + ' ' + tmp_file)
         if input('save changes? y/n: ') == 'y':
             save = True
     else:
@@ -285,7 +295,6 @@ def selector(bib_dict, opt, prog="dmenu", interactive=True):
         if prog == "dmenu":
             id = getoutput('sed -e \'s/^L//g\' "' + tmp_file + '" | column -s\| -t | dmenu -i -l 20 | awk \'{print $1}\'')
         elif prog == "fzf":
-            print("fzf")
             id = system('sed -e \'s/^L//g\' "' + tmp_file + '" | column -s\| -t | fzf | awk \'{print $1}\'')
         print(id)
     else:
@@ -300,10 +309,8 @@ def selector(bib_dict, opt, prog="dmenu", interactive=True):
 
     print(opt)
     if opt == 'open' or opt == 'fulltext':
-        print(id)
-        print(bib_dict[id])
         file = bib_dict[id]["file"]
-        getoutput('open ' + file + ' &')
+        getoutput('screen -d -m open ' + file + '')
     elif opt == 'doi':
         if interactive:
             copy(bib_dict[id]['doi'])
@@ -361,11 +368,13 @@ def main():
     else:
         config['main']['fulltext_dir'] = config['main']['dir'] + '/fulltext'
 
+    clipboard_content = paste()
     parser = ArgumentParser()
     #parser.add_argument('-f','--file', default=config['main']['json_file'], type=str, help='bibtex file')
     #parser.add_argument('-w','--write', type=str, choices=['json', 'bib', 'std', 'stdout'], default="json",  help='format to write to: json')
     #parser.add_argument('-o','--output', type=str, default=config['main']['json_file'], help='output file')
-    parser.add_argument('-a','--add', type=str, help='source to add')
+    parser.add_argument('-a','--add', type=str, help='source to add', nargs='?')
+    parser.add_argument('-c', '--add_clip', action='store_true', help='add source from clipbard')
     parser.add_argument('-d','--dmenu', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='dmenu selector')
     parser.add_argument('-z','--fzf', type=str, choices=['open', 'doi', 'id', 'url', 'fulltext'], help='fzf selector')
     parser.add_argument('-i','--id', type=str, help='id of paper to edit in combination with tags or note options')
@@ -380,8 +389,12 @@ def main():
 
     bib_dict = get_bib_dict(config["main"]["json_file"])
 
+    if args.add_clip:
+        args.add = paste()
+
     if args.add:
         bib_dict = add_entry(bib_dict, args.add)
+
 
     if args.tags:
         if not args.id:
