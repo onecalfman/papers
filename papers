@@ -161,7 +161,7 @@ def write_db(bib_dict):
     global config
     write_json(bib_dict, config['main']['json_file'])
     write_bib(bib_dict, config['main']['bib_file'])
-    write_yaml(bib_dict, config['main']['bib_file'])
+    write_yaml(bib_dict, config['main']['yaml_file'])
     return True
 
 def stdout_bib(bib_dict):
@@ -308,9 +308,11 @@ def selector(bib_dict, opt, prog="dmenu", interactive=True):
             remove(id_file)
 
     print(opt)
+    print(id)
     if opt == 'open' or opt == 'fulltext':
         file = bib_dict[id]["file"]
-        getoutput('screen -d -m open ' + file + '')
+        #getoutput('screen -d -m open ' + file + '')
+        getoutput('open ' + file + '')
     elif opt == 'doi':
         if interactive:
             copy(bib_dict[id]['doi'])
@@ -362,6 +364,11 @@ def main():
         config['main']['bib_file'] = config['main']['bib_file'].replace('$HOME', str(Path.home()))
     else:
         bib_file = config['main']['dir'] + '/papers.bib'
+
+    if 'yaml_file' in config['main']:
+        config['main']['yaml_file'] = config['main']['yaml_file'].replace('$HOME', str(Path.home()))
+    else:
+        yaml_file = config['main']['dir'] + '/papers.yaml'
 
     if 'fulltext_dir' in config['main']:
         config['main']['fulltext_dir'] = config['main']['fulltext_dir'].replace('$HOME', str(Path.home()))
